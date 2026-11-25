@@ -312,6 +312,8 @@ h2.ttl .en{color:var(--gold);font-size:26px}
 .share-box{display:flex;gap:6px}
 .share-box input{flex:1;min-width:0;border:2px dashed var(--gold);border-radius:10px;padding:5px 8px;font-size:12px;font-family:"Fredoka",sans-serif;color:var(--royal)}
 .share-box button{border:0;background:var(--gold);color:var(--navy);border-radius:10px;padding:0 12px}
+.share-box button.ghost{background:#fff;box-shadow:inset 0 0 0 2px var(--royal);color:var(--royal);padding:0 10px;white-space:nowrap}
+.share-tip{font-size:12.5px;color:#7a4b00;background:#fff6dd;border-radius:10px;padding:6px 10px;line-height:1.6}
 .shared-bar{background:linear-gradient(135deg,#fff1cf,#ffe2ef);border:2px solid var(--gold);border-radius:14px;padding:10px 12px;font-size:13.5px;line-height:1.6;color:#7a4b00}
 .shared-bar div{display:flex;gap:8px;margin-top:6px}
 .shared-bar button{border:0;background:var(--red);color:#fff;border-radius:999px;padding:5px 14px;font-size:13px}
@@ -2339,23 +2341,41 @@ function parseShare(hash) {
   return ids.length ? { ids, manual: m[1].includes('m'), meals: m[1].includes('f') } : null;
 }
 const shareBase = () => location.protocol.startsWith('http') ? location.origin + location.pathname : 'https://siwo55.github.io/';
-function copyText(t) {
-  if (navigator.clipboard && isSecureContext) return navigator.clipboard.writeText(t);
-  const ta = document.createElement('textarea'); ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = 0;
-  document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); ta.remove();
-  return ok ? Promise.resolve() : Promise.reject();
+function copyLegacy(t) {
+  const ta = document.createElement('textarea'); ta.value = t; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;opacity:0';
+  document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, t.length);
+  let ok = false; try { ok = document.execCommand('copy'); } catch {}
+  ta.remove(); return ok;
 }
-async function sharePlan(btn) {
-  if (!PL.plan) return toast('先选几个项目再分享');
+// 先用剪贴板接口，失败（部分手机浏览器、微信内置浏览器）再退回老办法
+function copyText(t) {
+  const legacy = () => copyLegacy(t) ? undefined : Promise.reject();
+  if (navigator.clipboard && isSecureContext) return navigator.clipboard.writeText(t).catch(legacy);
+  return Promise.resolve().then(legacy);
+}
+const inWeChat = /MicroMessenger/i.test(navigator.userAgent);
+function shareInfo() {
   const url = shareBase() + '#plan=' + shareCode();
   const n = PL.plan.stops.filter(s => s.kind === 'item' || s.kind === 'fixed').length;
-  const text = `我排好的上海迪士尼动线：${n} 个项目，预计 ${hm(PL.plan.t)} 离园，点开就能看到 👇`;
+  return { url, n, text: `我排好的上海迪士尼动线：${n} 个项目，预计 ${hm(PL.plan.t)} 离园，点开就能看到 👇` };
+}
+// 分享到微信用“复制链接再粘贴”：系统分享面板发到微信时，安卓会把内容变成 .txt 文件
+function sharePlan(btn) {
+  if (!PL.plan) return toast('先选几个项目再分享');
+  const { url, text, n } = shareInfo();
   PL.shareUrl = url; renderPlanner();
-  if (navigator.share && matchMedia('(pointer: coarse)').matches) {
-    try { await navigator.share({ title: '上海迪士尼一日游动线', text, url }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  if (inWeChat) { // 在微信里打开时，把地址栏换成分享链接，用右上角「···→发送给朋友」能发出链接卡片
+    history.replaceState(null, '', '#plan=' + shareCode());
+    document.title = `上海迪士尼一日游动线（${n} 个项目）`;
   }
-  copyText(text + '\n' + url).then(() => { sparkleAt(btn); toast('链接已复制，发给朋友打开就能看到这条动线 ✨'); })
-    .catch(() => toast('复制失败，请长按下面的链接手动复制'));
+  copyText(text + '\n' + url).then(() => {
+    sparkleAt(btn);
+    toast(inWeChat ? '链接已复制 ✨ 也可以点右上角「···」→「发送给朋友」' : '链接已复制 ✨ 打开微信，粘贴发给朋友就行');
+  }).catch(() => toast('自动复制失败，请长按下面的链接手动复制'));
+}
+async function shareOther() {
+  const { url, text } = shareInfo();
+  try { await navigator.share({ title: '上海迪士尼一日游动线', text, url }); } catch (e) { if (e.name !== 'AbortError') toast('当前浏览器不支持系统分享，请复制链接'); }
 }
 function loadShared() {
   const s = parseShare(location.hash); if (!s) return false;
@@ -2426,8 +2446,9 @@ function renderPlanner() {
       <div class="pl-order ${PL.manual ? 'manual' : ''}"><span class="po-l">${PL.manual
         ? `✋ 手动顺序${diff > 2 ? ` · 比自动优化晚约 <b>${diff}</b> 分钟离园` : ' · 已经很顺路了 👍'}`
         : '✨ 已自动优化顺序'}</span><span class="po-r">按住 <i>${GRIP}</i> 拖动可调整顺序</span></div>
-      <div class="pl-acts"><button class="plan-btn" data-replan>✨ 自动优化顺序</button><button class="share-btn" data-share>🔗 分享这条动线</button></div>
-      ${PL.shareUrl ? `<div class="share-box"><input readonly value="${PL.shareUrl}"><button data-copy>复制</button></div>` : ''}
+      <div class="pl-acts"><button class="plan-btn" data-replan>✨ 自动优化顺序</button><button class="share-btn" data-share>🔗 复制分享链接</button></div>
+      ${PL.shareUrl ? `<div class="share-box"><input readonly value="${PL.shareUrl}"><button data-copy>复制</button>${navigator.share && !inWeChat ? '<button data-other class="ghost">其他 App</button>' : ''}</div>
+        <div class="share-tip">${inWeChat ? '👉 点右上角「···」→「发送给朋友」，或者把复制的链接粘贴到聊天里' : '👉 打开微信，在聊天框长按「粘贴」发送；对方点链接就能看到这条动线'}</div>` : ''}
       <div class="pl-steps">${p.stops.map((s, k) => stepRow(s, k, p)).join('')}</div>`;
   }
   $('#planner').innerHTML = `${banner}
@@ -2462,6 +2483,7 @@ $('#planner').addEventListener('click', e => {
   const rm = t.closest('[data-rm]'); if (rm) { e.stopPropagation(); return toggleSel(rm.dataset.rm); }
   if (t.closest('[data-replan]')) { adoptShared(true); replan('force'); sparkleAt(t); return toast('已自动优化顺序 ✨'); }
   if (t.closest('[data-share]')) return sharePlan(t.closest('[data-share]'));
+  if (t.closest('[data-other]')) return shareOther();
   if (t.closest('[data-copy]')) { const v = $('#planner .share-box input').value; return copyText(v).then(() => toast('链接已复制 ✨')).catch(() => { $('#planner .share-box input').select(); toast('请长按链接手动复制'); }); }
   if (t.closest('[data-adopt]')) { adoptShared(); return renderPlanner(); }
   if (t.closest('[data-leave]')) return leaveShared();
